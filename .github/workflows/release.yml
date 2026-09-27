@@ -1,0 +1,152 @@
+# Builds the Daadoo macOS DMGs from a daadoo-app tag, publishes them as a
+# release of this repo, and updates Casks/daadoo.rb.
+#
+# Runs here, not in the private daadoo-app repo, because Actions minutes on
+# public repos are free (macOS minutes on private repos bill at 10x).
+#
+# Triggers:
+#   - automatically: pushing a `local-agent-vX.Y.Z` tag in daadoo-app sends a
+#     `local-agent-release` repository_dispatch here (its local-agent-release.yml)
+#   - manually: gh workflow run release.yml -R s-abbasi/homebrew-daadoo -f tag=local-agent-vX.Y.Z
+#
+# Secret: DAADOO_APP_TOKEN, a fine-grained PAT with Contents: read on
+# s-abbasi/daadoo-app (to check it out).
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: daadoo-app tag to build (local-agent-vX.Y.Z)
+        required: true
+  repository_dispatch:
+    types: [local-agent-release]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      TAG: ${{ github.event.inputs.tag || github.event.client_payload.tag }}
+    steps:
+      - name: Resolve version from tag
+        run: |
+          if [[ ! "$TAG" =~ ^local-agent-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::expected a local-agent-vX.Y.Z tag, got '$TAG'"
+            exit 1
+          fi
+          echo "VERSION=${BASH_REMATCH[1]}" >> "$GITHUB_ENV"
+
+      - name: Check out tap
+        uses: actions/checkout@v4
+        with:
+          path: tap
+
+      - name: Check out daadoo-app at ${{ env.TAG }}
+        uses: actions/checkout@v4
+        with:
+          repository: s-abbasi/daadoo-app
+          ref: refs/tags/${{ env.TAG }}
+          token: ${{ secrets.DAADOO_APP_TOKEN }}
+          path: app
+          # Don't leave the token in app/.git/config for bun install and the
+          # build scripts to find.
+          persist-credentials: false
+
+      # An existing release means an earlier run published it but failed
+      # before the cask landed. Skip the build and recover the cask from the
+      # published DMGs (a rebuild wouldn't reproduce their checksums).
+      - name: Check tag matches app version, and whether it's already released
+        working-directory: app/apps/local-agent
+        run: |
+          app_version=$(jq -r .version src-tauri/tauri.conf.json)
+          if [ "$app_version" != "$VERSION" ]; then
+            echo "::error::tag is v$VERSION but src-tauri/tauri.conf.json says $app_version"
+            exit 1
+          fi
+          if gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::release v$VERSION already exists; only syncing the cask"
+            echo "RELEASED=true" >> "$GITHUB_ENV"
+          else
+            echo "RELEASED=false" >> "$GITHUB_ENV"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # >= 1.2.4 is required: older Bun builds a sidecar codesign rejects.
+      - uses: oven-sh/setup-bun@v2
+        if: env.RELEASED == 'false'
+        with:
+          bun-version: 1.3.11
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: env.RELEASED == 'false'
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        if: env.RELEASED == 'false'
+        with:
+          workspaces: app/apps/local-agent/src-tauri -> target
+
+      - name: Install dependencies
+        if: env.RELEASED == 'false'
+        working-directory: app
+        run: bun install
+
+      # Builds both ad-hoc signed DMGs into dist/.
+      - name: Build DMGs
+        if: env.RELEASED == 'false'
+        working-directory: app/apps/local-agent
+        run: bun run release:macos
+
+      # Release first, so the cask never points at a download that isn't live.
+      - name: Publish release
+        if: env.RELEASED == 'false'
+        working-directory: app/apps/local-agent
+        run: |
+          gh release create "v$VERSION" \
+            "dist/daadoo_${VERSION}_aarch64.dmg" "dist/daadoo_${VERSION}_x64.dmg" \
+            -R "$GITHUB_REPOSITORY" --title "v$VERSION" \
+            --notes "Daadoo $VERSION, built from s-abbasi/daadoo-app@$TAG."
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Checksums always come from the DMGs as published, so this step alone
+      # can bring the cask in line with an existing release.
+      - name: Update cask
+        run: |
+          mkdir published
+          gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -D published \
+            -p "daadoo_${VERSION}_aarch64.dmg" -p "daadoo_${VERSION}_x64.dmg"
+          ARM_SHA=$(shasum -a 256 "published/daadoo_${VERSION}_aarch64.dmg" | cut -d' ' -f1)
+          INTEL_SHA=$(shasum -a 256 "published/daadoo_${VERSION}_x64.dmg" | cut -d' ' -f1)
+          export VERSION ARM_SHA INTEL_SHA
+          perl -pe '
+            s/^  version ".*"$/  version "$ENV{VERSION}"/;
+            s/(sha256 arm: +)"[0-9a-f]{64}"/$1"$ENV{ARM_SHA}"/;
+            s/(intel: )"[0-9a-f]{64}"/$1"$ENV{INTEL_SHA}"/;
+          ' app/apps/local-agent/packaging/homebrew/Casks/daadoo.rb > tap/Casks/daadoo.rb
+          grep -q "version \"$VERSION\"" tap/Casks/daadoo.rb
+          grep -q "$ARM_SHA" tap/Casks/daadoo.rb
+          grep -q "$INTEL_SHA" tap/Casks/daadoo.rb
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/daadoo.rb
+          if git diff --cached --quiet; then
+            echo "Casks/daadoo.rb already matches v$VERSION"
+          else
+            git commit -m "daadoo $VERSION"
+            git push
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
