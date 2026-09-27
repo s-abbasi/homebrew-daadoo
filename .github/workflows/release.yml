@@ -63,14 +63,8 @@ jobs:
       # An existing release means an earlier run published it but failed
       # before the cask landed. Skip the build and recover the cask from the
       # published DMGs (a rebuild wouldn't reproduce their checksums).
-      - name: Check tag matches app version, and whether it's already released
-        working-directory: app/apps/local-agent
+      - name: Check whether it's already released
         run: |
-          app_version=$(jq -r .version src-tauri/tauri.conf.json)
-          if [ "$app_version" != "$VERSION" ]; then
-            echo "::error::tag is v$VERSION but src-tauri/tauri.conf.json says $app_version"
-            exit 1
-          fi
           if gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "::notice::release v$VERSION already exists; only syncing the cask"
             echo "RELEASED=true" >> "$GITHUB_ENV"
@@ -101,11 +95,14 @@ jobs:
         working-directory: app
         run: bun install
 
-      # Builds both ad-hoc signed DMGs into dist/.
+      # Builds both ad-hoc signed DMGs into dist/. The tag is the version:
+      # release:macos applies it with `tauri build --config`, so tauri.conf.json
+      # doesn't need bumping. (Tags from before that change carry the version in
+      # tauri.conf.json and ignore the argument.)
       - name: Build DMGs
         if: env.RELEASED == 'false'
         working-directory: app/apps/local-agent
-        run: bun run release:macos
+        run: bun run release:macos "$VERSION"
 
       # Release first, so the cask never points at a download that isn't live.
       - name: Publish release
