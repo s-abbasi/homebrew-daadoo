@@ -1,12 +1,13 @@
-# Template for the Daadoo cask. The live copy is Casks/daadoo.rb in the public
-# tap s-abbasi/homebrew-daadoo, which its release workflow overwrites with this
-# file after `bun run release:macos` rewrites the version and sha256 below.
+# Homebrew cask for the Daadoo desktop agent. Generated: the template is
+# apps/local-agent/packaging/homebrew/Casks/daadoo.rb in s-abbasi/daadoo-app,
+# and s-abbasi/homebrew-daadoo's release workflow fills in version and sha256
+# and commits it there as Casks/daadoo.rb. Edit the template, not the tap copy.
 cask "daadoo" do
   arch arm: "aarch64", intel: "x64"
 
-  version "0.1.1"
-  sha256 arm:   "58c408d82db2ed9148891af4dadbe050395c5b55cd1361e4b81e73e7d8c714bf",
-         intel: "aa0b845782168cef78a4831ecf6cf0a1879a7a1ac047fb10393fc78d0a3953ce"
+  version "0.1.2"
+  sha256 arm:   "fe35e865f1aa27d85430c2d5bcd62589e76dd179714990664f13b769c7ae76b0",
+         intel: "fe79581499f28699a8a72659cf8083f8f0d4df3a29c9d1ff513476ce2e3d24b9"
 
   url "https://github.com/s-abbasi/homebrew-daadoo/releases/download/v#{version}/daadoo_#{version}_#{arch}.dmg"
   name "Daadoo"
