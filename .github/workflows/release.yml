@@ -1,0 +1,117 @@
+# Builds the Daadoo macOS DMGs from a daadoo-app tag, publishes them as a
+# release of this repo, and updates Casks/daadoo.rb.
+#
+# Runs here, not in the private daadoo-app repo, because Actions minutes on
+# public repos are free (macOS minutes on private repos bill at 10x).
+#
+# Triggers:
+#   - automatically: pushing a `local-agent-vX.Y.Z` tag in daadoo-app sends a
+#     `local-agent-release` repository_dispatch here (its local-agent-release.yml)
+#   - manually: gh workflow run release.yml -R s-abbasi/homebrew-daadoo -f tag=local-agent-vX.Y.Z
+#
+# Secret: DAADOO_APP_TOKEN, a fine-grained PAT with Contents: read on
+# s-abbasi/daadoo-app (to check it out).
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: daadoo-app tag to build (local-agent-vX.Y.Z)
+        required: true
+  repository_dispatch:
+    types: [local-agent-release]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      TAG: ${{ github.event.inputs.tag || github.event.client_payload.tag }}
+    steps:
+      - name: Resolve version from tag
+        run: |
+          if [[ ! "$TAG" =~ ^local-agent-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::expected a local-agent-vX.Y.Z tag, got '$TAG'"
+            exit 1
+          fi
+          echo "VERSION=${BASH_REMATCH[1]}" >> "$GITHUB_ENV"
+
+      - name: Check out tap
+        uses: actions/checkout@v4
+        with:
+          path: tap
+
+      - name: Check out daadoo-app at ${{ env.TAG }}
+        uses: actions/checkout@v4
+        with:
+          repository: s-abbasi/daadoo-app
+          ref: refs/tags/${{ env.TAG }}
+          token: ${{ secrets.DAADOO_APP_TOKEN }}
+          path: app
+
+      - name: Check tag matches app version
+        working-directory: app/apps/local-agent
+        run: |
+          app_version=$(jq -r .version src-tauri/tauri.conf.json)
+          if [ "$app_version" != "$VERSION" ]; then
+            echo "::error::tag is v$VERSION but src-tauri/tauri.conf.json says $app_version"
+            exit 1
+          fi
+          if gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::release v$VERSION already exists in $GITHUB_REPOSITORY"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # >= 1.2.4 is required: older Bun builds a sidecar codesign rejects.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/apps/local-agent/src-tauri -> target
+
+      - name: Install dependencies
+        working-directory: app
+        run: bun install
+
+      # Builds both ad-hoc signed DMGs into dist/ and writes their version and
+      # sha256 into packaging/homebrew/Casks/daadoo.rb.
+      - name: Build DMGs
+        working-directory: app/apps/local-agent
+        run: bun run release:macos
+
+      # Release first, so the cask never points at a download that isn't live.
+      - name: Publish release
+        working-directory: app/apps/local-agent
+        run: |
+          gh release create "v$VERSION" \
+            "dist/daadoo_${VERSION}_aarch64.dmg" "dist/daadoo_${VERSION}_x64.dmg" \
+            -R "$GITHUB_REPOSITORY" --title "v$VERSION" \
+            --notes "Daadoo $VERSION, built from s-abbasi/daadoo-app@$TAG."
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Update cask
+        working-directory: tap
+        run: |
+          cp ../app/apps/local-agent/packaging/homebrew/Casks/daadoo.rb Casks/daadoo.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/daadoo.rb
+          git commit -m "daadoo $VERSION"
+          git push
