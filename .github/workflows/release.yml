@@ -62,7 +62,7 @@ jobs:
 
       - name: Check out daadoo-app at ${{ env.TAG }}
         if: env.RELEASED == 'false'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: s-abbasi/daadoo-app
           ref: refs/tags/${{ env.TAG }}
@@ -101,7 +101,7 @@ jobs:
         working-directory: app/apps/local-agent
         run: bun run release:windows "$VERSION"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: env.RELEASED == 'false'
         with:
           name: windows-installer
@@ -124,12 +124,12 @@ jobs:
           echo "VERSION=${BASH_REMATCH[1]}" >> "$GITHUB_ENV"
 
       - name: Check out tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: tap
 
       - name: Check out daadoo-app at ${{ env.TAG }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: s-abbasi/daadoo-app
           ref: refs/tags/${{ env.TAG }}
@@ -183,7 +183,7 @@ jobs:
         working-directory: app/apps/local-agent
         run: bun run release:macos "$VERSION"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         if: env.RELEASED == 'false'
         with:
           name: windows-installer
