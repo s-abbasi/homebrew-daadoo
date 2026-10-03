@@ -1,5 +1,5 @@
-# Builds the Daadoo macOS DMGs from a daadoo-app tag, publishes them as a
-# release of this repo, and updates Casks/daadoo.rb.
+# Builds the Daadoo macOS DMGs and Windows installer from a daadoo-app tag,
+# publishes them as a release of this repo, and updates Casks/daadoo.rb.
 #
 # Runs here, not in the private daadoo-app repo, because Actions minutes on
 # public repos are free (macOS minutes on private repos bill at 10x).
@@ -30,7 +30,82 @@ permissions:
   contents: write
 
 jobs:
+  # The release job below publishes this job's installer along with the DMGs,
+  # so a release never goes out without its Windows build.
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAG: ${{ github.event.inputs.tag || github.event.client_payload.tag }}
+    steps:
+      - name: Resolve version from tag
+        run: |
+          if [[ ! "$TAG" =~ ^local-agent-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::expected a local-agent-vX.Y.Z tag, got '$TAG'"
+            exit 1
+          fi
+          echo "VERSION=${BASH_REMATCH[1]}" >> "$GITHUB_ENV"
+
+      # Same as the release job: an existing release keeps its published assets.
+      - name: Check whether it's already released
+        run: |
+          if gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "RELEASED=true" >> "$GITHUB_ENV"
+          else
+            echo "RELEASED=false" >> "$GITHUB_ENV"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Check out daadoo-app at ${{ env.TAG }}
+        if: env.RELEASED == 'false'
+        uses: actions/checkout@v4
+        with:
+          repository: s-abbasi/daadoo-app
+          ref: refs/tags/${{ env.TAG }}
+          token: ${{ secrets.DAADOO_APP_TOKEN }}
+          path: app
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        if: env.RELEASED == 'false'
+        with:
+          bun-version: 1.3.11
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: env.RELEASED == 'false'
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        if: env.RELEASED == 'false'
+        with:
+          workspaces: app/apps/local-agent/src-tauri -> target
+
+      - name: Install dependencies
+        if: env.RELEASED == 'false'
+        working-directory: app
+        run: bun install
+
+      # Unsigned NSIS installer into dist/. Tags from before release:windows
+      # existed fail here, which also holds back their macOS release.
+      - name: Build installer
+        if: env.RELEASED == 'false'
+        working-directory: app/apps/local-agent
+        run: bun run release:windows "$VERSION"
+
+      - uses: actions/upload-artifact@v4
+        if: env.RELEASED == 'false'
+        with:
+          name: windows-installer
+          path: app/apps/local-agent/dist/daadoo_${{ env.VERSION }}_x64-setup.exe
+          if-no-files-found: error
+
   release:
+    needs: build-windows
     runs-on: macos-latest
     timeout-minutes: 60
     env:
@@ -104,13 +179,23 @@ jobs:
         working-directory: app/apps/local-agent
         run: bun run release:macos "$VERSION"
 
+      - uses: actions/download-artifact@v4
+        if: env.RELEASED == 'false'
+        with:
+          name: windows-installer
+          path: app/apps/local-agent/dist
+
       # Release first, so the cask never points at a download that isn't live.
+      # The unversioned installer copy keeps
+      # releases/latest/download/daadoo_x64-setup.exe a permanent download link.
       - name: Publish release
         if: env.RELEASED == 'false'
         working-directory: app/apps/local-agent
         run: |
+          cp "dist/daadoo_${VERSION}_x64-setup.exe" dist/daadoo_x64-setup.exe
           gh release create "v$VERSION" \
             "dist/daadoo_${VERSION}_aarch64.dmg" "dist/daadoo_${VERSION}_x64.dmg" \
+            "dist/daadoo_${VERSION}_x64-setup.exe" dist/daadoo_x64-setup.exe \
             -R "$GITHUB_REPOSITORY" --title "v$VERSION" \
             --notes "Daadoo $VERSION, built from s-abbasi/daadoo-app@$TAG."
         env:
