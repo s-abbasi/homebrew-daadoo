@@ -9,8 +9,11 @@
 #     `local-agent-release` repository_dispatch here (its local-agent-release.yml)
 #   - manually: gh workflow run release.yml -R s-abbasi/homebrew-daadoo -f tag=local-agent-vX.Y.Z
 #
-# Secret: DAADOO_APP_TOKEN, a fine-grained PAT with Contents: read on
-# s-abbasi/daadoo-app (to check it out).
+# Secrets:
+#   - DAADOO_APP_TOKEN, a fine-grained PAT with Contents: read on
+#     s-abbasi/daadoo-app (to check it out).
+#   - TAURI_SIGNING_PRIVATE_KEY, the auto-updater's signing key (its public key
+#     is plugins.updater.pubkey in daadoo-app's tauri.conf.json).
 name: Release
 
 on:
@@ -100,12 +103,16 @@ jobs:
         if: env.RELEASED == 'false'
         working-directory: app/apps/local-agent
         run: bun run release:windows "$VERSION"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
       - uses: actions/upload-artifact@v6
         if: env.RELEASED == 'false'
         with:
           name: windows-installer
-          path: app/apps/local-agent/dist/daadoo_${{ env.VERSION }}_x64-setup.exe
+          path: |
+            app/apps/local-agent/dist/daadoo_${{ env.VERSION }}_x64-setup.exe
+            app/apps/local-agent/dist/daadoo_${{ env.VERSION }}_x64-setup.exe.sig
           if-no-files-found: error
 
   release:
@@ -182,6 +189,8 @@ jobs:
         if: env.RELEASED == 'false'
         working-directory: app/apps/local-agent
         run: bun run release:macos "$VERSION"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
       - uses: actions/download-artifact@v7
         if: env.RELEASED == 'false'
@@ -189,9 +198,17 @@ jobs:
           name: windows-installer
           path: app/apps/local-agent/dist
 
+      # latest.json is what installed apps poll for updates. It ships in the
+      # same release as the files it points at, so they go live together.
+      - name: Write updater manifest
+        if: env.RELEASED == 'false'
+        working-directory: app/apps/local-agent
+        run: bun run updater:manifest "$VERSION"
+
       # Release first, so the cask never points at a download that isn't live.
       # The unversioned installer copy keeps
-      # releases/latest/download/daadoo_x64-setup.exe a permanent download link.
+      # releases/latest/download/daadoo_x64-setup.exe a permanent download link,
+      # as latest.json's is for the auto-updater.
       - name: Publish release
         if: env.RELEASED == 'false'
         working-directory: app/apps/local-agent
@@ -200,6 +217,9 @@ jobs:
           gh release create "v$VERSION" \
             "dist/daadoo_${VERSION}_aarch64.dmg" "dist/daadoo_${VERSION}_x64.dmg" \
             "dist/daadoo_${VERSION}_x64-setup.exe" dist/daadoo_x64-setup.exe \
+            "dist/daadoo_${VERSION}_aarch64.app.tar.gz" "dist/daadoo_${VERSION}_aarch64.app.tar.gz.sig" \
+            "dist/daadoo_${VERSION}_x64.app.tar.gz" "dist/daadoo_${VERSION}_x64.app.tar.gz.sig" \
+            "dist/daadoo_${VERSION}_x64-setup.exe.sig" dist/latest.json \
             -R "$GITHUB_REPOSITORY" --title "v$VERSION" \
             --notes "Daadoo $VERSION, built from s-abbasi/daadoo-app@$TAG."
         env:
