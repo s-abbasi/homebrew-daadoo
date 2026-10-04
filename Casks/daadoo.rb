@@ -5,15 +5,18 @@
 cask "daadoo" do
   arch arm: "aarch64", intel: "x64"
 
-  version "0.1.12"
-  sha256 arm:   "9a0549fd8a8db1cdf8872d50870336c0a8c2242afe781be7853a8713a5382d8b",
-         intel: "86925693241db080fb61de88aef1ce810c0c0a5736d727a1d3baed6ead04e10b"
+  version "0.2.0"
+  sha256 arm:   "a13c3db32be4adc4a42d6374134c7acbbb8e76a6e81aa750207e43c72123c7c2",
+         intel: "b1bcc7700974984157bcc0643ea7bfa12b20792da0f123b1ad78ace7996210a3"
 
   url "https://github.com/s-abbasi/homebrew-daadoo/releases/download/v#{version}/daadoo_#{version}_#{arch}.dmg"
   name "Daadoo"
   desc "Desktop agent that runs Daadoo LinkedIn campaigns from your own machine"
   homepage "https://github.com/s-abbasi/homebrew-daadoo"
 
+  # The app updates itself (tauri-plugin-updater), so `brew upgrade` leaves it
+  # alone unless run with --greedy.
+  auto_updates true
   depends_on macos: ">= :big_sur"
 
   app "daadoo.app"
