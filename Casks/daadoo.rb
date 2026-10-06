@@ -5,9 +5,9 @@
 cask "daadoo" do
   arch arm: "aarch64", intel: "x64"
 
-  version "0.5.2"
-  sha256 arm:   "21490a3829e20053cb2689c9741b80654e9581fb34d7e8228d5a06b19975e59d",
-         intel: "f0dbf54deb90d070bf472d61fae054bcaa46cba3d755e60514b1699663a68eea"
+  version "0.5.3"
+  sha256 arm:   "8860ad1d3fc52dd3628fe7fe37e3ab631a21efcc0968143f45a4721ea576dc98",
+         intel: "194bd587d356fa159f5c6bd6b2d5c7407ab44a3d0571ce0ab30ae158096bf82b"
 
   url "https://github.com/s-abbasi/homebrew-daadoo/releases/download/v#{version}/daadoo_#{version}_#{arch}.dmg"
   name "Daadoo"
